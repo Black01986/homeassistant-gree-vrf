@@ -23,6 +23,29 @@ Confirmed working:
 
 This is currently experimental and needs testing on additional GREE GMV/VRF systems.
 
+## Installation
+
+### HACS – Custom Repository
+
+This integration is **not included in the official HACS repository**. It can be installed by adding this GitHub repository as a custom repository.
+
+1. Open **HACS** in Home Assistant.
+2. Go to **Integrations**.
+3. Open the menu in the top-right corner and select **Custom repositories**.
+4. Add the following repository:
+
+   `https://github.com/Black01986/homeassistant-gree-vrf`
+
+5. Select **Integration** as the repository type.
+6. Click **Add**.
+7. Find **GREE GMV / VRF** in HACS and install it.
+8. Restart Home Assistant.
+9. Go to **Settings → Devices & services → Add integration**.
+10. Search for **GREE GMV / VRF** and complete the configuration.
+
+> [!NOTE]
+> This integration is currently experimental and has been tested with a **GREE MC31-00/F Wi-Fi/cloud controller**.
+
 ## Credits and upstream projects
 
 This project would not exist without the work of the following projects and contributors:
