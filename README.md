@@ -6,7 +6,9 @@ This project extends existing GREE Home Assistant and Python implementations to 
 
 ## Project status
 
-The implementation has been tested on a real GREE GMV VRF installation with five indoor units connected through a single Wi-Fi/cloud gateway.
+The implementation has been tested on a real GREE GMV VRF installation with five indoor units connected through a single **GREE MC31-00/F Wi-Fi/cloud controller**.
+
+Other GREE GMV/VRF controllers may also work, but have not yet been verified.
 
 Confirmed working:
 
