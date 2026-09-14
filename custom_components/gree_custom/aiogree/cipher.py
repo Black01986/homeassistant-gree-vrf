@@ -113,7 +113,7 @@ class CipherV1(CipherBase):
             unpadder = padding.PKCS7(AES_BLOCK_SIZE_BITS).unpadder()
             plaintext_bytes = unpadder.update(decrypted) + unpadder.finalize()
             plaintext = plaintext_bytes.decode()
-        except ValueError, Exception:  # noqa: BLE001
+        except (ValueError, Exception):  # noqa: BLE001
             # GREE PROTOCOL: Fallback for some devices sending malformed padding
             plaintext = decrypted.decode(errors="ignore")
 

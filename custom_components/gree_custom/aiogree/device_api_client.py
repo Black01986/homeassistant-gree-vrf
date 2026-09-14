@@ -303,6 +303,11 @@ class DeviceApiClient:
             cols = pack.get("cols", [])
             dat = pack.get("dat", [])
             swing = dict(zip(cols, dat))
+            _LOGGER.warning(
+                self._mac,
+                swing.get("SwUpDn"),
+                swing.get("SwingLfRig"),
+            )
 
             result = gree_process_status_pack(
                 pack,

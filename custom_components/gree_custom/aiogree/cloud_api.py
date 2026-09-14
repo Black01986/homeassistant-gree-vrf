@@ -443,6 +443,7 @@ class GreeCloudApi:
         for home in homes:
             devices = await self.get_devices(home.id)
             for d in devices:
+                _LOGGER.warning("VRF RAW: mac=%s pmac=%s name=%s", d.mac, d.pmac, d.name)
             all_devices.extend(devices)
 
         # Filter duplicates: when same key exists with MACs where one ends with '00'

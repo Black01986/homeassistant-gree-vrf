@@ -734,6 +734,10 @@ class GreeClimate(GreeEntity, ClimateEntity, RestoreEntity):  # pyright: ignore[
     @override
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         """Set new target swing operation."""
+        _LOGGER.warning(
+            self.device.unique_id,
+            swing_mode,
+        )
         _LOGGER.debug("async_set_swing_mode(%s, %s)", self.device.unique_id, swing_mode)
 
         if not self.available:
@@ -764,6 +768,10 @@ class GreeClimate(GreeEntity, ClimateEntity, RestoreEntity):  # pyright: ignore[
     @override
     async def async_set_swing_horizontal_mode(self, swing_horizontal_mode: str) -> None:
         """Set new target horizontal swing operation."""
+        _LOGGER.warning(
+            self.device.unique_id,
+            swing_horizontal_mode,
+        )
         _LOGGER.debug(
             "async_set_swing_horizontal_mode(%s, %s)",
             self.device.unique_id,

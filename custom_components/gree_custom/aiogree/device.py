@@ -207,7 +207,7 @@ class GreeDevice:
             props = [prop.value for prop in InfoProp]
             raw_info, _ = await self._client.query_props(props, len(props))
 
-        except GreeConnectionError, GreeProtocolError:
+        except (GreeConnectionError, GreeProtocolError):
             _LOGGER.exception(
                 "[%s:%s] Failed fetching device device info",
                 self.unique_id,
@@ -262,7 +262,7 @@ class GreeDevice:
 
             self._state.process_new_state(status)
 
-        except GreeConnectionError, GreeProtocolError:
+        except (GreeConnectionError, GreeProtocolError):
             _LOGGER.exception(
                 "[%s:%s] Failed fetching device device status",
                 self.unique_id,
@@ -308,6 +308,10 @@ class GreeDevice:
             self._state.set(GreeProp.BEEPER, 0 if self._beeper else 1)
             self._state.set(GreeProp.BEEPER_NEW, 1 if self._beeper else 0)
 
+        _LOGGER.warning(
+            self._mac_addr,
+            {k.value: v for k, v in self._state.pending.items()},
+        )
 
         try:
             await self._client.set_props(
@@ -319,7 +323,7 @@ class GreeDevice:
 
             await self.fetch_device_status()
 
-        except GreeConnectionError, GreeProtocolError:
+        except (GreeConnectionError, GreeProtocolError):
             _LOGGER.exception(
                 "[%s:%s] Failed pushing device device status",
                 self.unique_id,

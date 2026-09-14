@@ -976,6 +976,13 @@ class SetupConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         d = self._selected_devices[self._current_setup_device_index]
 
+        _LOGGER.warning(
+            "VRF FLOW: device=%s mqtt_controller=%s key_present=%s user_input=%s",
+            d.mac,
+            d.mac_controller_mqtt,
+            bool(d.key),
+            user_input is not None,
+        )
 
         if user_input is not None:
             local = user_input.get(CONF_DEVICE_CONNECTION_LOCAL, {})

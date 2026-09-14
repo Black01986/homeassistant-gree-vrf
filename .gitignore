@@ -1,8 +1,7 @@
 __pycache__/
 *.py[cod]
-*.bak
-*.bak-*
-*.log
+*$py.class
 .DS_Store
 .vscode/
 .idea/
+*.log

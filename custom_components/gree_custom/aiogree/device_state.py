@@ -106,7 +106,7 @@ class DeviceState:
                 else:
                     unknown.append(key)
 
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 errors.append(key)
 
         if unknown:

@@ -1014,7 +1014,7 @@ async def gree_get_status(
             status.update(res.prop_values)
             missing.extend(res.missing_props)
 
-    except GreeConnectionError, GreeProtocolError:
+    except (GreeConnectionError, GreeProtocolError):
         raise
 
     except Exception as err:
@@ -1118,7 +1118,7 @@ async def gree_set_status(
             mac_addr_controller, json_payload, cipher, transport
         )
 
-    except GreeConnectionError, GreeProtocolError:
+    except (GreeConnectionError, GreeProtocolError):
         raise
 
     except Exception as err:
@@ -1410,6 +1410,7 @@ async def gree_discover_devices_cloud(
     responses = await cloud_api.get_all_devices()
 
     for dev in responses:
+        _LOGGER.warning("VRF DEBUG: mac=%s pmac=%s name=%s", dev.mac, dev.pmac, dev.name)
         mac, mac_controller = gree_extract_macs(dev.mac)
         if dev.pmac:
             mac_controller = dev.pmac.replace(":", "").replace("-", "").strip().lower()
