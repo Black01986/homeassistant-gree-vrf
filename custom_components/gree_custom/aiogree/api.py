@@ -79,12 +79,15 @@ class GreeProp(StrEnum):
     SENSOR_INDOOR_TEMPERATURE_1 = "EnvTem"
     SENSOR_INDOOR_TEMPERATURE_2 = "InEvaTem"
     SENSOR_INDOOR_TEMPERATURE_3 = "TemSen"  # value heavily varies with operation mode
+    SENSOR_INDOOR_TEMPERATURE_VRF = "InTem"  # GMV/VRF: raw room temperature is °C + 40
     # outside temperature sensors, used to read the current outdoors temperature, if available, ordered by preference
     SENSOR_OUTSIDE_TEMPERATURE_1 = "OutEnvTem"
     SENSOR_OUTSIDE_TEMPERATURE_2 = "TemsSenOut"
     # indoor humidity sensor, used to read the current room humidity, if available, ordered by preference
     SENSOR_HUMIDITY_1 = "DwatSen"
     SENSOR_HUMIDITY_2 = "HumSen"
+    SENSOR_HUMIDITY_VRF = "InHumi"  # GMV/VRF: raw relative humidity is RH% + 40
+    SENSOR_HUMIDITY_VRF_ENABLED = "InHumiEn"  # 1 when the VRF indoor unit has a valid humidity sensor
     # error display. 0 if no error, otherwise error
     SENSOR_FAULT = "FaultDisplay"
 

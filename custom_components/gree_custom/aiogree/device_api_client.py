@@ -209,6 +209,38 @@ class DeviceApiClient:
                 else:
                     raise
 
+        # GREE GMV/VRF cloud child units expose the current indoor
+        # temperature as InTem (guarded by InTemEn) instead of TemSen.
+        # When TemSen was requested but not returned, query the two VRF
+        # fields together so gree_process_status_pack() can normalize
+        # InTem -> TemSen for the standard climate entity.
+        is_vrf_child = self.controller_mac != self._mac
+        if is_vrf_child and GreeProp.SENSOR_INDOOR_TEMPERATURE_3.value in props:
+            if GreeProp.SENSOR_INDOOR_TEMPERATURE_3.value not in state:
+                try:
+                    result = await gree_get_status(
+                        self.controller_mac,
+                        self._mac,
+                        self._userid,
+                        ["InTemEn", "InTem"],
+                        self._cipher,
+                        self._transport,
+                    )
+                    temsen = result.prop_values.get(
+                        GreeProp.SENSOR_INDOOR_TEMPERATURE_3.value
+                    )
+                    if temsen is not None:
+                        state[GreeProp.SENSOR_INDOOR_TEMPERATURE_3.value] = temsen
+                        missing = [
+                            prop
+                            for prop in missing
+                            if prop != GreeProp.SENSOR_INDOOR_TEMPERATURE_3.value
+                        ]
+                except GreeError:
+                    # Keep the normal missing-property behaviour if the VRF
+                    # fallback is unavailable on this particular unit.
+                    pass
+
         self._available = True
 
         return state, missing

@@ -365,6 +365,7 @@ class GreeDevice:
             [
                 GreeProp.SENSOR_HUMIDITY_1,
                 GreeProp.SENSOR_HUMIDITY_2,
+                GreeProp.SENSOR_HUMIDITY_VRF,
             ]
         )
 
@@ -568,6 +569,7 @@ class GreeDevice:
             GreeProp.SENSOR_INDOOR_TEMPERATURE_1,
             GreeProp.SENSOR_INDOOR_TEMPERATURE_2,
             GreeProp.SENSOR_INDOOR_TEMPERATURE_3,
+            GreeProp.SENSOR_INDOOR_TEMPERATURE_VRF,
         ):
             if self._state.supports(prop):
                 raw_c = self._state.get(prop, None)
@@ -607,9 +609,21 @@ class GreeDevice:
         for prop in (
             GreeProp.SENSOR_HUMIDITY_1,
             GreeProp.SENSOR_HUMIDITY_2,
+            GreeProp.SENSOR_HUMIDITY_VRF,
         ):
             if self._state.supports(prop):
-                return self._state.get(prop, None)
+                raw = self._state.get(prop, None)
+                if raw is None:
+                    return None
+                # GMV/VRF exposes InHumi even on indoor units that do not
+                # have a humidity sensor. In that case InHumiEn=0 and the
+                # raw placeholder (observed as 130) must not be exposed.
+                if prop == GreeProp.SENSOR_HUMIDITY_VRF:
+                    if self._state.get(GreeProp.SENSOR_HUMIDITY_VRF_ENABLED, 0) != 1:
+                        return None
+                    # Verified against the GREE app: 107 raw == 67% RH.
+                    return int(raw) - 40
+                return int(raw)
 
         return None
 
