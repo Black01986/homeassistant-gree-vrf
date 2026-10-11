@@ -49,6 +49,8 @@ class GreeProp(StrEnum):
     TARGET_TEMPERATURE_BIT = "TemRec"
     # defines the unit of temperature for the target temperature
     TARGET_TEMPERATURE_UNIT = "TemUn"
+    # GMV/VRF: target temperature in tenths of °C (250 = 25.0), read only here
+    TARGET_TEMPERATURE_DECI = "SetDeciTem"
 
     # Quiet mode which slows down the fan to its most quiet speed. Not available in Dry and Fan mode.
     FEAT_QUIET_MODE = "Quiet"

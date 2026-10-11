@@ -825,6 +825,11 @@ class GreeDevice:
             if self.target_temperature_unit == TemperatureUnits.F:
                 return gree_get_target_temperature_f(raw_c, tem_rec)
             if self.target_temperature_unit == TemperatureUnits.C:
+                deci = self._state.get(GreeProp.TARGET_TEMPERATURE_DECI, None)
+                # GMV/VRF units report half degrees only here. Use it only when
+                # it agrees with SetTem, e.g. not while a new SetTem is pending
+                if deci is not None and int(deci // 10) == raw_c:
+                    return deci / 10
                 return gree_get_target_temperature_c(raw_c, tem_rec)
         return 0.0
 
