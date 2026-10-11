@@ -1,12 +1,13 @@
 """Data update coordinator for Gree integration."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from typing import Any, override
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .aiogree.api import OperationMode
@@ -15,6 +16,13 @@ from .aiogree.errors import GreeBindingError, GreeConnectionError
 from .helpers import try_find_new_ip
 
 _LOGGER = logging.getLogger(__name__)
+
+# A VRF/commercial gateway can answer the read right after a command with the
+# old cached state of the indoor unit. While the device has not reported the
+# sent values, poll again after this many seconds, at most this many times.
+# The reported state is always shown, never the sent one.
+FOLLOW_UP_REFRESH_DELAY = 3.0
+FOLLOW_UP_REFRESH_MAX = 3
 
 # Home Assistant config entry where the runtime data are Gree coordinators keyed by normalized MAC addresses ("xxxxxxxxxxxx").
 type GreeConfigEntry = ConfigEntry[dict[str, GreeCoordinator]]
@@ -51,6 +59,8 @@ class GreeCoordinator(DataUpdateCoordinator[None]):
         self.device: GreeDevice = device
         self._feature_auto_xfan: bool = False
         self._feature_auto_light: bool = False
+        self._unsub_follow_up: CALLBACK_TYPE | None = None
+        self._follow_ups_left: int = 0
 
     async def _setup(self) -> None:
         """Bind to the device before the first coordinator refresh.
@@ -70,6 +80,7 @@ class GreeCoordinator(DataUpdateCoordinator[None]):
     @override
     async def async_shutdown(self) -> None:
         """Clean up the coordinator and Gree device resources."""
+        self._cancel_follow_up()
         self.device.api_client.remove_status_listener(self._device_pushed_status)
 
         await self.device.unbind_device()
@@ -122,6 +133,40 @@ class GreeCoordinator(DataUpdateCoordinator[None]):
 
             # retry once after recovering IP
             await self.device.push_device_status()
+
+        self._follow_ups_left = FOLLOW_UP_REFRESH_MAX
+        self._schedule_follow_up()
+
+    def _schedule_follow_up(self) -> None:
+        """Poll again shortly while the device has not reported the last command."""
+        if self._unsub_follow_up is not None:
+            return
+
+        if not self.device.unconfirmed_props:
+            return
+
+        if self._follow_ups_left <= 0:
+            _LOGGER.warning(
+                "[%s] Device did not report the sent values %s, showing the reported state",
+                self.device.unique_id,
+                {k.value: v for k, v in self.device.unconfirmed_props.items()},
+            )
+            return
+
+        self._follow_ups_left -= 1
+        self._unsub_follow_up = async_call_later(
+            self.hass, FOLLOW_UP_REFRESH_DELAY, self._async_follow_up
+        )
+
+    async def _async_follow_up(self, _now: datetime) -> None:
+        self._unsub_follow_up = None
+        await self.async_refresh()
+        self._schedule_follow_up()
+
+    def _cancel_follow_up(self) -> None:
+        if self._unsub_follow_up is not None:
+            self._unsub_follow_up()
+            self._unsub_follow_up = None
 
     def get_coordinator_diagnostics(self) -> dict[str, Any]:
         """Return diagnostic information for the coordinator.

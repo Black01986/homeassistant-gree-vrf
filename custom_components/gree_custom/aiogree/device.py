@@ -104,6 +104,15 @@ class GreeDevice:
             userid=user_id,
         )
 
+        # Last status read (values, missing props), kept for error reports
+        self._last_status: tuple[dict[str, str], list[str]] = ({}, [])
+
+        # Props sent by the last command that the device did not report back
+        self._unconfirmed: dict[GreeProp, int] = {}
+
+        # Registered first, so the state is updated before other listeners run
+        self._client.add_status_listener(self._handle_pushed_status)
+
     async def bind_with_transport(
         self,
         preferred_local_version: EncryptionVersion | None = None,
@@ -124,7 +133,11 @@ class GreeDevice:
 
         if local_transport:
             if not local_controller_mac:
-                _LOGGER.error("No controller MAC provided for local transport")
+                # Cloud-only devices have no local controller: nothing to try
+                _LOGGER.debug(
+                    "[%s] No controller MAC provided for local transport, skipping it",
+                    self._mac_addr,
+                )
             else:
                 attempts.append(
                     (local_transport, local_controller_mac, preferred_local_version)
@@ -205,15 +218,26 @@ class GreeDevice:
 
         try:
             props = [prop.value for prop in InfoProp]
-            raw_info, _ = await self._client.query_props(props, len(props))
+            raw_info, missing = await self._client.query_props(props, len(props))
 
-        except (GreeConnectionError, GreeProtocolError):
+        except GreeConnectionError:
             _LOGGER.exception(
                 "[%s:%s] Failed fetching device device info",
                 self.unique_id,
                 self.transport,
             )
             raise
+
+        except GreeProtocolError:
+            # Device info is only informative (firmware, model). Some commercial
+            # units do not answer it properly: continue without it.
+            _LOGGER.warning(
+                "[%s:%s] Device info is unavailable, continuing without it",
+                self.unique_id,
+                self.transport,
+                exc_info=True,
+            )
+            return
 
         except Exception as err:
             _LOGGER.exception(
@@ -227,12 +251,14 @@ class GreeDevice:
 
         else:
             _LOGGER.debug(
-                "[%s:%s] Got device info: %s", self.unique_id, self.transport, raw_info
+                "[%s:%s] Got device info: %s (missing: %s)",
+                self.unique_id,
+                self.transport,
+                raw_info,
+                missing,
             )
 
             self._state.process_new_state(raw_info)
-
-            _LOGGER.debug(self._state.info)
 
             self._firmware_protocol_version = self._state.info.get(
                 InfoProp.PROTOCOL_VERSION, ""
@@ -251,16 +277,20 @@ class GreeDevice:
         )
 
         try:
-            status, _ = await self._client.query_props(
+            status, missing = await self._client.query_props(
                 [prop.value for prop in self._state.polled_properties],
                 len(self._state.polled_properties),
             )
+            self._last_status = (status, missing)
 
             _LOGGER.debug(
                 "[%s:%s] Got device status: %s", self.unique_id, self.transport, status
             )
 
             self._state.process_new_state(status)
+
+            if self._unconfirmed:
+                self._update_unconfirmed(self._unconfirmed)
 
         except (GreeConnectionError, GreeProtocolError):
             _LOGGER.exception(
@@ -308,20 +338,31 @@ class GreeDevice:
             self._state.set(GreeProp.BEEPER, 0 if self._beeper else 1)
             self._state.set(GreeProp.BEEPER_NEW, 1 if self._beeper else 0)
 
-        _LOGGER.warning(
+        sent = dict(self._state.pending)
+
+        _LOGGER.debug(
+            "[%s:%s] Sending to '%s' via controller '%s': %s",
+            self.unique_id,
+            self.transport,
             self._mac_addr,
-            {k.value: v for k, v in self._state.pending.items()},
+            self.mac_address_controller,
+            {k.value: v for k, v in sent.items()},
         )
 
         try:
-            await self._client.set_props(
-                {k.value: v for k, v in self._state.pending.items()}
-            )
+            try:
+                await self._client.set_props({k.value: v for k, v in sent.items()})
+            finally:
+                # Never keep showing values the device did not report.
+                # On success the read below has the real state, on failure
+                # the last reported state stays.
+                self._state.clear_pending()
 
             _LOGGER.debug("[%s:%s] Device status set", self.unique_id, self.transport)
-            self._state.clear_pending()
 
+            # An acknowledged command is no proof it was applied: read it back
             await self.fetch_device_status()
+            self._update_unconfirmed(sent)
 
         except (GreeConnectionError, GreeProtocolError):
             _LOGGER.exception(
@@ -339,8 +380,45 @@ class GreeDevice:
             )
             raise GreeError(f"Error setting device {self._mac_addr} status") from err
 
+    def _update_unconfirmed(self, sent: Mapping[GreeProp, int]) -> None:
+        """Track the sent props the device does not report (yet)."""
+        self._unconfirmed = {
+            prop: value
+            for prop, value in sent.items()
+            if prop in self._state.polled_properties
+            and self._state.raw.get(prop) != value
+        }
+
+        if self._unconfirmed:
+            _LOGGER.info(
+                "[%s] Device does not report the sent values yet: %s, reported: %s",
+                self.unique_id,
+                {k.value: v for k, v in self._unconfirmed.items()},
+                {k.value: self._state.raw.get(k) for k in self._unconfirmed},
+            )
+
+    def _handle_pushed_status(self, values: dict[str, str]) -> None:
+        """Apply a status the device pushed on its own (e.g. app or remote changes)."""
+        self._state.process_new_state(values)
+        if self._unconfirmed:
+            self._update_unconfirmed(self._unconfirmed)
+
+    @property
+    def unconfirmed_props(self) -> Mapping[GreeProp, int]:
+        """Props of the last command the device has not reported back yet."""
+        return self._unconfirmed
+
     def _remove_unsupported_props(self) -> None:
         """Remove unsupported properties from the list to update."""
+
+        # An empty status is a failed request, not proof that nothing is supported.
+        # Pruning on it would leave the device with no properties to poll for good.
+        if self._state.polled_properties and not self._state.raw:
+            status, missing = self._last_status
+            raise GreeProtocolError(
+                f"Device '{self._mac_addr}' returned no usable status values, cannot "
+                f"detect supported properties. Received: {status}, missing: {missing}"
+            )
 
         # Remove all unsupported properties
         self._state.invalidate_missing_properties()
@@ -399,6 +477,8 @@ class GreeDevice:
         data["state_info"] = dict(self._state.info)
         data["state"] = {str(k): v for k, v in self._state.raw.items()}
         data["state_pending"] = {str(k): v for k, v in self._state.pending.items()}
+        data["polled_properties"] = [str(p) for p in self._state.polled_properties]
+        data["unconfirmed"] = {str(k): v for k, v in self._unconfirmed.items()}
 
         return data
 
