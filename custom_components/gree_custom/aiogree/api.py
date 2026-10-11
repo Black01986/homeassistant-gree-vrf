@@ -13,7 +13,13 @@ from pydantic import BaseModel, ConfigDict
 from .cipher import CipherBase, EncryptionVersion, get_cipher
 from .cloud_api import GreeCloudApi
 from .const import DEFAULT_DEVICE_PORT, DEFAULT_DEVICE_USERID, MAX_PACK_SIZE
-from .errors import GreeBindingError, GreeConnectionError, GreeError, GreeProtocolError
+from .errors import (
+    GreeBindingError,
+    GreeConnectionError,
+    GreeError,
+    GreeMalformedResponseError,
+    GreeProtocolError,
+)
 from .helpers import gree_extract_macs, redact_str
 from .transport import GreeBaseTransport
 from .transport_udp import GreeUdpTransport, async_udp_broadcast_request
@@ -979,11 +985,14 @@ async def gree_get_status(
     batches: list[list[str]] = []
     current: list[str] = []
     current_size = EMPTY_PACK_OVERHEAD
+    max_props = transport.status_batch_limits.get(mac_addr_controller)
 
     for prop in prop_names:
         prop_size = len(json.dumps([prop]).encode())
 
-        if current_size + prop_size < MAX_PACK_SIZE:
+        if current_size + prop_size < MAX_PACK_SIZE and (
+            max_props is None or len(current) < max_props
+        ):
             current.append(prop)
             current_size += prop_size
         else:
@@ -1008,12 +1017,14 @@ async def gree_get_status(
 
     try:
         for batched_props in batches:
-            pack = _create_get_status_pack(mac_addr, batched_props)
-            json_payload = _create_payload(pack, "pack", 0, mac_addr, uid)
-            result = await gree_get_response_pack(
-                mac_addr_controller, json_payload, cipher, transport
+            res = await _gree_get_status_batch(
+                mac_addr_controller,
+                mac_addr,
+                uid,
+                batched_props,
+                cipher,
+                transport,
             )
-            res = gree_process_status_pack(result, batched_props)
             status.update(res.prop_values)
             missing.extend(res.missing_props)
 
@@ -1039,6 +1050,10 @@ def gree_process_status_pack(pack: dict, props: list[str] | None) -> StatusResul
         Mapping of property names to values, along with a list of
         properties that were not returned by the device.
 
+    Raises:
+        GreeMalformedResponseError: When the values cannot be mapped
+            unambiguously to the property names.
+
     """
     # Gree protocol provides best-effort responses
     # Meaning:
@@ -1056,9 +1071,27 @@ def gree_process_status_pack(pack: dict, props: list[str] | None) -> StatusResul
         if len(cols) == 1:
             # if there is a single prop without value, add to missing
             _LOGGER.warning("Device queried for invalid prop: %s", cols)
-            return StatusResult(prop_values={}, missing_props=cols)
+            return StatusResult(prop_values={}, missing_props=list(cols))
 
-        raise GreeProtocolError(f"Malformed response: cols={len(cols)} dat={len(dat)}")
+        # With more than one column there is no way to know which value is
+        # missing. Never zip them: that would assign values to the wrong props.
+        _LOGGER.debug(
+            "Malformed status response: %s", describe_status_pack(pack, props)
+        )
+        raise GreeMalformedResponseError(
+            f"Malformed response: cols={len(cols)} dat={len(dat)}"
+        )
+
+    if props and cols and not set(cols) & set(props):
+        # A response for another request (e.g. a late answer to a request that
+        # timed out) must not be mistaken for this one.
+        _LOGGER.debug(
+            "Status response does not match the request: %s",
+            describe_status_pack(pack, props),
+        )
+        raise GreeMalformedResponseError(
+            "Status response does not contain any of the requested props"
+        )
 
     status_values: dict[str, str] = {}
     returned_props: set[str] = set()
@@ -1074,7 +1107,12 @@ def gree_process_status_pack(pack: dict, props: list[str] | None) -> StatusResul
             if intem is not None:
                 status_values["TemSen"] = intem
                 returned_props.add("TemSen")
-        if "TemRec" not in status_values:
+        # Only derive TemRec from data in this pack, or when it was asked
+        # for, so a partial (pushed) pack does not overwrite the half degree
+        if "TemRec" not in status_values and (
+            "Add0.5" in status_values
+            or (props and "TemRec" in props and "SetTem" in status_values)
+        ):
             status_values["TemRec"] = int(status_values.get("Add0.5", 0) or 0)
             returned_props.add("TemRec")
 
@@ -1086,6 +1124,159 @@ def gree_process_status_pack(pack: dict, props: list[str] | None) -> StatusResul
 
     _LOGGER.debug("Got status for device: %s", status_values)
     return StatusResult(prop_values=status_values, missing_props=invalid_props)
+
+
+def describe_status_pack(pack: dict, props: list[str] | None) -> dict[str, Any]:
+    """Summarize a decrypted status pack for diagnostics.
+
+    Status packs carry no credentials, but only whitelisted metadata is
+    included so that a future protocol change cannot leak anything sensitive.
+    """
+    cols = list(pack.get("cols") or [])
+    dat = list(pack.get("dat") or [])
+    requested = list(props or [])
+
+    return {
+        "t": pack.get("t"),
+        "r": pack.get("r"),
+        "mac": pack.get("mac"),
+        "sub": pack.get("sub"),
+        "requested": requested,
+        "cols": cols,
+        "dat": dat,
+        "len_cols": len(cols),
+        "len_dat": len(dat),
+        "requested_not_returned": [p for p in requested if p not in cols],
+        "returned_not_requested": [c for c in cols if requested and c not in requested],
+    }
+
+
+async def _gree_get_status_batch(
+    mac_addr_controller: str,
+    mac_addr: str,
+    uid: int,
+    props: list[str],
+    cipher: CipherBase,
+    transport: GreeBaseTransport,
+    _depth: int = 0,
+) -> StatusResult:
+    """Query one batch of props, splitting it when the answer is unusable.
+
+    Some units (e.g. Tadiran/Gree commercial units behind a cloud gateway)
+    answer a multi-prop request with fewer values than columns, or with no
+    values at all. Such an answer cannot be assigned to props safely, so the
+    batch is split in halves and queried again, down to single props if
+    needed. Props that still have no value are reported as missing, never
+    guessed.
+    """
+    pack = _create_get_status_pack(mac_addr, props)
+    json_payload = _create_payload(pack, "pack", 0, mac_addr, uid)
+    unanswered = False
+
+    try:
+        result = await gree_get_response_pack(
+            mac_addr_controller, json_payload, cipher, transport
+        )
+    except GreeConnectionError as err:
+        # Some gateways silently drop requests for too many props. Only split
+        # while the connection itself is up, so an outage still fails fast.
+        if len(props) <= 1 or getattr(transport, "connected", None) is not True:
+            raise
+        result = {}
+        unanswered = True
+        reason = str(err)
+    else:
+        try:
+            res = gree_process_status_pack(result, props)
+        except GreeMalformedResponseError as err:
+            if len(props) <= 1:
+                raise
+            reason = str(err)
+        else:
+            if res.prop_values or len(props) <= 1:
+                return res
+            reason = "no values returned"
+
+    # Only the first split is a warning, so a log without debug enabled still
+    # shows what the device answered. Responses carry no credentials.
+    log = _LOGGER.warning if _depth == 0 else _LOGGER.debug
+    log(
+        "[%s] Device '%s' via controller '%s' gave an unusable response (%s) "
+        "for %d props, splitting the request. Response: %s",
+        transport,
+        mac_addr,
+        mac_addr_controller,
+        reason,
+        len(props),
+        describe_status_pack(result, props),
+    )
+
+    status: dict[str, str] = {}
+    missing: list[str] = []
+    middle = len(props) // 2
+    connection_error: GreeConnectionError | None = None
+    answered = 0
+
+    for part in (props[:middle], props[middle:]):
+        try:
+            part_res = await _gree_get_status_batch(
+                mac_addr_controller,
+                mac_addr,
+                uid,
+                part,
+                cipher,
+                transport,
+                _depth + 1,
+            )
+        except GreeConnectionError as err:
+            if getattr(transport, "connected", None) is not True:
+                raise
+            # A single prop the gateway never answers is treated as missing
+            connection_error = err
+            missing.extend(part)
+            continue
+        except GreeProtocolError:
+            _LOGGER.debug(
+                "[%s] Device '%s' gave no usable value for props %s",
+                transport,
+                mac_addr,
+                part,
+                exc_info=True,
+            )
+            missing.extend(part)
+            continue
+
+        status.update(part_res.prop_values)
+        missing.extend(part_res.missing_props)
+        answered += 1
+
+    if answered == 0 and connection_error is not None:
+        raise connection_error
+
+    if unanswered:
+        # Remember the size that worked, so polls do not wait on a timeout again
+        limit = max(1, middle)
+        previous = transport.status_batch_limits.get(mac_addr_controller)
+        if previous is None or limit < previous:
+            transport.status_batch_limits[mac_addr_controller] = limit
+            _LOGGER.info(
+                "[%s] Controller '%s' does not answer requests for %d props, "
+                "using at most %d per request",
+                transport,
+                mac_addr_controller,
+                len(props),
+                limit,
+            )
+
+    if _depth == 0:
+        _LOGGER.info(
+            "[%s] Split queries for '%s': returned=%s missing=%s",
+            transport,
+            mac_addr,
+            status,
+            missing,
+        )
+    return StatusResult(prop_values=status, missing_props=missing)
 
 
 async def gree_set_status(
@@ -1136,21 +1327,34 @@ async def gree_set_status(
     # Sometimes the response have them, sometimes don't or they actually miss set props
     # As such, don't error/raise if that is the case
     # the fields bellow are optional
-    options_set: list[str] = result.get("opt", [])
-    values_set_1 = list(map(int, result.get("p", [])))
-    values_set_2 = list(map(int, result.get("val", [])))  # If present, must match [p]
+    # The echo is informational only: callers read the state back to verify.
+    # Some units (e.g. commercial gateways) echo lists of different lengths or
+    # non-numeric values, which must not turn an applied command into an error.
+    options_set = result.get("opt") or []
+    values_set = result.get("p") or result.get("val") or []
 
     # In case the response has nothing, but didn't had a error code
     # Assume all was set and return all given props
-    if len(options_set) == 0:
+    if not options_set:
         return prop_values
 
-    if len(values_set_2) > 0 and len(values_set_1) != len(values_set_2):
-        raise GreeProtocolError(
-            f"Options and values set mismatch {options_set} {values_set_1}"
+    if len(options_set) != len(values_set):
+        _LOGGER.debug(
+            "[%s] Command echo does not match: opt=%s p=%s val=%s",
+            transport,
+            options_set,
+            result.get("p"),
+            result.get("val"),
         )
+        return prop_values
 
-    updated_props = dict(zip(options_set, values_set_1, strict=True))
+    updated_props: dict[str, int] = {}
+    for opt, value in zip(options_set, values_set, strict=True):
+        try:
+            updated_props[str(opt)] = int(value)
+        except (TypeError, ValueError):
+            _LOGGER.debug("[%s] Non-numeric echo for %s: %r", transport, opt, value)
+
     if updated_props != prop_values:
         _LOGGER.debug(
             "[%s] Expected updated props %s but got %s",
@@ -1413,7 +1617,7 @@ async def gree_discover_devices_cloud(
     responses = await cloud_api.get_all_devices()
 
     for dev in responses:
-        _LOGGER.warning("VRF DEBUG: mac=%s pmac=%s name=%s", dev.mac, dev.pmac, dev.name)
+        _LOGGER.debug("VRF DEBUG: mac=%s pmac=%s name=%s", dev.mac, dev.pmac, dev.name)
         mac, mac_controller = gree_extract_macs(dev.mac)
         if dev.pmac:
             mac_controller = dev.pmac.replace(":", "").replace("-", "").strip().lower()
