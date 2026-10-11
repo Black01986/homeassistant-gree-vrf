@@ -56,7 +56,9 @@ ENCRYPTION_VERSION_AUTO = "0"
 DEFAULT_ENCRYPTION_VERSION = ENCRYPTION_VERSION_AUTO
 DEFAULT_ENCRYPTION_KEY = ""
 DEFAULT_DISABLE_AVAILABLE_CHECK = False
-DEFAULT_RESTORE_STATES = True
+# Off: restoring re-sends the last HA state as commands on startup, which
+# overrides changes made in the app or on the unit while HA was down
+DEFAULT_RESTORE_STATES = False
 MIN_SCAN_INTERVAL = 5
 DEFAULT_SCAN_INTERVAL = 60
 DEFAULT_PREFER_CLOUD = False
