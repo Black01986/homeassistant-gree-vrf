@@ -36,6 +36,8 @@ CONF_ALL_DEVICE_CONNECTIONS = "device_connections"
 CONF_ALL_DEVICE_OPTIONS = "device_options"
 CONF_UID = "uid"
 CONF_ENCRYPTION_KEY = "encryption_key"
+# Never log or export these: device keys, cloud password and MQTT token
+REDACT_KEYS = (CONF_ENCRYPTION_KEY, "key", "password", "token")
 CONF_ENCRYPTION_VERSION = "encryption_version"
 CONF_DISABLE_AVAILABLE_CHECK = "disable_available_check"
 CONF_MAX_ONLINE_ATTEMPTS = "max_online_attempts"

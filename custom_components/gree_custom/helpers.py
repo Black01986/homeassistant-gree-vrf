@@ -156,7 +156,7 @@ async def try_find_new_ip(
     )
 
     if not device.transport or not isinstance(device.transport, GreeUdpTransport):
-        _LOGGER.error("Can't find the IP of a device that is not local")
+        _LOGGER.debug("Not searching a new IP for a device that is not local")
         return False
 
     previous_ip = device.transport.ip_addr
