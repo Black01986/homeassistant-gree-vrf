@@ -81,7 +81,7 @@ class CipherV1(CipherBase):
     @override
     def encrypt(self, data: str) -> tuple[str, str | None]:
         """Encrypt data with V1."""
-        _LOGGER.debug("Encrypting data (V1): %s", data)
+        _LOGGER.debug("Encrypting %d bytes (V1)", len(data))
 
         # padding
         padder = padding.PKCS7(AES_BLOCK_SIZE_BITS).padder()
@@ -94,14 +94,14 @@ class CipherV1(CipherBase):
 
         encoded = base64.b64encode(encrypted).decode()
 
-        _LOGGER.debug("Encrypted data (V1): %s", encoded)
+        _LOGGER.debug("Encrypted to %d bytes (V1)", len(encoded))
 
         return encoded, None
 
     @override
     def decrypt(self, data: str, tag: str | None = None) -> str:
         """Decrypt data with V1."""
-        _LOGGER.debug("Decrypting data (V1): %s", data)
+        _LOGGER.debug("Decrypting %d bytes (V1)", len(data))
 
         cipher = self._create_cipher()
         decryptor = cipher.decryptor()
@@ -145,7 +145,7 @@ class CipherV2(CipherBase):
     @override
     def encrypt(self, data: str) -> tuple[str, str]:
         """Encrypt data with V2 and return the data with a tag."""
-        _LOGGER.debug("Encrypting data (V2): %s", data)
+        _LOGGER.debug("Encrypting %d bytes (V2)", len(data))
 
         cipher = self._create_cipher()
         encryptor = cipher.encryptor()
@@ -158,13 +158,13 @@ class CipherV2(CipherBase):
         encoded = base64.b64encode(encrypted).decode()
         tag_encoded = base64.b64encode(tag).decode()
 
-        _LOGGER.debug("Encrypted data (V2): %s, tag='%s'", encoded, tag_encoded)
+        _LOGGER.debug("Encrypted to %d bytes (V2)", len(encoded))
         return encoded, tag_encoded
 
     @override
     def decrypt(self, data: str, tag: str | None) -> str:
         """Decrypt data with V2 and verify the data with the tag."""
-        _LOGGER.debug("Decrypting data (V2): %s, tag=%s", data, tag)
+        _LOGGER.debug("Decrypting %d bytes (V2)", len(data))
 
         if not tag:
             raise GreeError("Decrypting data (V2) failed: tag is needed")

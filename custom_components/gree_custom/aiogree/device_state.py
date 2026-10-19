@@ -98,7 +98,7 @@ class DeviceState:
                     prop = PROP_KEY_TO_ENUM[key]
 
                     if prop in self._props_to_poll:
-                        self._raw[prop] = int(value)
+                        self._raw[prop] = _to_int(value)
 
                 elif key in INFOPROP_KEY_TO_ENUM:
                     self._info[INFOPROP_KEY_TO_ENUM[key]] = value
@@ -113,7 +113,11 @@ class DeviceState:
             _LOGGER.debug("[%s] Unknown properties: %s", self._device_id, unknown)
 
         if errors:
-            _LOGGER.debug("[%s] Invalid values: %s", self._device_id, errors)
+            _LOGGER.info(
+                "[%s] Ignoring non-numeric values: %s",
+                self._device_id,
+                {k: new_state[k] for k in errors},
+            )
 
     #
     # Property helpers
@@ -200,3 +204,18 @@ class DeviceState:
     def info(self) -> MappingProxyType[InfoProp, str]:
         """The Device Info property values."""
         return MappingProxyType(self._info)
+
+
+def _to_int(value: object) -> int:
+    """Convert a status value to int, accepting integral strings like "24.0".
+
+    Raises ValueError/TypeError for anything else (e.g. "" for unsupported props).
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    number = float(value)  # type: ignore[arg-type]
+    if not number.is_integer():
+        raise ValueError(f"Not an integer value: {value!r}")
+    return int(number)

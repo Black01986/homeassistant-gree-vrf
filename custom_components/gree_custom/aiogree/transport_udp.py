@@ -1,6 +1,7 @@
 """Handles UDP connections."""
 
 import asyncio
+from collections.abc import Callable
 import json
 import logging
 from typing import Any, cast, override
@@ -106,6 +107,7 @@ class GreeUdpTransport(GreeBaseTransport):
         self,
         mac_controller: str,
         json_str: str,
+        accept: Callable[[str], bool] | None = None,
     ) -> str:
 
         last_error: Exception | None = None

@@ -318,10 +318,13 @@ class GreeCloudApi:
         encrypted_response = await self._send_request("/App/UserLoginV2", body)
         decrypted = self._decrypt(base64.b64decode(encrypted_response))
 
-        _LOGGER.debug("Login response (decrypted): %s", decrypted)
-
         data = json.loads(decrypted)
-        _LOGGER.debug("Login response (parsed): %s", data)
+        # The response holds the session token: log its shape only
+        _LOGGER.debug(
+            "Login response: r=%s fields=%s",
+            data.get("r") if isinstance(data, dict) else None,
+            sorted(data) if isinstance(data, dict) else type(data).__name__,
+        )
 
         # Check for error response
         if "r" in data and data["r"] != 200:
@@ -376,7 +379,7 @@ class GreeCloudApi:
         encrypted_response = await self._send_request("/App/GetHomes", body)
         decrypted = self._decrypt(base64.b64decode(encrypted_response))
         data = json.loads(decrypted)
-        _LOGGER.debug(data)
+        _LOGGER.debug("Got %d homes", len(data.get("home", [])))
 
         homes = [CloudHome(id=h["id"], name=h["name"].strip()) for h in data["home"]]
 
@@ -416,7 +419,8 @@ class GreeCloudApi:
         )
         decrypted = self._decrypt(base64.b64decode(encrypted_response))
         data = json.loads(decrypted)
-        _LOGGER.debug(data)
+        # Device entries hold their encryption keys: never log them raw
+        _LOGGER.debug("Got %d rooms for home %s", len(data.get("rooms", [])), home_id)
 
         devices = []
         for room in data["rooms"]:
@@ -443,7 +447,7 @@ class GreeCloudApi:
         for home in homes:
             devices = await self.get_devices(home.id)
             for d in devices:
-                _LOGGER.warning("VRF RAW: mac=%s pmac=%s name=%s", d.mac, d.pmac, d.name)
+                _LOGGER.debug("VRF RAW: mac=%s pmac=%s name=%s", d.mac, d.pmac, d.name)
             all_devices.extend(devices)
 
         # Filter duplicates: when same key exists with MACs where one ends with '00'

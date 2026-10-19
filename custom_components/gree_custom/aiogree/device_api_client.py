@@ -8,13 +8,20 @@ from .api import (
     GreeProp,
     InfoProp,
     OtherProps,
+    describe_status_pack,
     gree_get_status,
     gree_process_status_pack,
     gree_set_status,
     gree_try_bind,
 )
 from .cipher import CipherBase, EncryptionVersion, get_cipher
-from .errors import GreeBindingError, GreeError, GreeRuntimeError
+from .errors import (
+    GreeBindingError,
+    GreeConnectionError,
+    GreeError,
+    GreeProtocolError,
+    GreeRuntimeError,
+)
 from .helpers import chunked, gree_decrypt_pack, redact_str
 from .transport import GreeBaseTransport
 
@@ -188,6 +195,8 @@ class DeviceApiClient:
 
         state: dict[str, str] = {}
         missing: list[str] = []
+        answered = False
+        connection_lost = False
 
         for chunk in chunked(props, request_batch):
             try:
@@ -202,6 +211,16 @@ class DeviceApiClient:
 
                 state.update(result.prop_values)
                 missing.extend(result.missing_props)
+                answered = True
+
+            except GreeConnectionError:
+                # The last known state can no longer be trusted
+                self._available = False
+                connection_lost = True
+                if error_as_missing:
+                    missing.extend(chunk)
+                else:
+                    raise
 
             except GreeError:
                 if error_as_missing:
@@ -241,7 +260,8 @@ class DeviceApiClient:
                     # fallback is unavailable on this particular unit.
                     pass
 
-        self._available = True
+        if answered and not connection_lost:
+            self._available = True
 
         return state, missing
 
@@ -274,14 +294,18 @@ class DeviceApiClient:
         if not self._transport:
             raise GreeRuntimeError("No transport set.")
 
-        await gree_set_status(
-            self.controller_mac,
-            self._mac,
-            self._userid,
-            values,
-            self._cipher,
-            self._transport,
-        )
+        try:
+            await gree_set_status(
+                self.controller_mac,
+                self._mac,
+                self._userid,
+                values,
+                self._cipher,
+                self._transport,
+            )
+        except GreeConnectionError:
+            self._available = False
+            raise
 
         self._available = True
 
@@ -320,37 +344,58 @@ class DeviceApiClient:
         if "status" not in topic:
             return
 
-        response = gree_decrypt_pack(
-            payload,
-            self._cipher,
+        try:
+            response = gree_decrypt_pack(
+                payload,
+                self._cipher,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug(
+                "[%s] Could not decrypt pushed status on %s", self._mac, topic
+            )
+            return
+
+        pack = response.get("pack")
+        if not isinstance(pack, dict):
+            return
+
+        # A VRF gateway publishes status for all indoor units on the same
+        # controller topic. Ignore packs belonging to another unit. Packs
+        # with no unit id at all are only trusted for standalone devices.
+        target = str(pack.get("sub") or pack.get("mac") or "").lower()
+        if target != self._mac.lower() and (
+            target or self.controller_mac.lower() != self._mac.lower()
+        ):
+            _LOGGER.debug(
+                "[%s] Ignoring pushed status for '%s' on %s",
+                self._mac,
+                target,
+                topic,
+            )
+            return
+
+        try:
+            result = gree_process_status_pack(pack, None)
+        except GreeProtocolError:
+            _LOGGER.debug(
+                "[%s] Ignoring unusable pushed status: %s",
+                self._mac,
+                describe_status_pack(pack, None),
+            )
+            return
+
+        _LOGGER.debug(
+            "[%s] Pushed status on %s: %s", self._mac, topic, result.prop_values
         )
 
-        if pack := response.get("pack"):
-            # A VRF gateway publishes status for all indoor units on the same
-            # controller topic. Ignore packs belonging to another child.
-            sub_mac = str(pack.get("sub", "")).lower()
-            if sub_mac and sub_mac != self._mac.lower():
-                return
+        if not result.prop_values:
+            return
 
-            cols = pack.get("cols", [])
-            dat = pack.get("dat", [])
-            swing = dict(zip(cols, dat))
-            _LOGGER.warning(
-                self._mac,
-                swing.get("SwUpDn"),
-                swing.get("SwingLfRig"),
-            )
-
-            result = gree_process_status_pack(
-                pack,
-                None,
-            )
-
-            for listener in self._listeners:
-                try:
-                    listener(result.prop_values)
-                except Exception:
-                    _LOGGER.exception("Error during listener execution")
+        for listener in self._listeners:
+            try:
+                listener(result.prop_values)
+            except Exception:
+                _LOGGER.exception("Error during listener execution")
 
     #
     # Properties

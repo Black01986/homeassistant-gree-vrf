@@ -3,13 +3,11 @@
 import logging
 from typing import Any
 
-from config.custom_components.gree_custom.const import CONF_ENCRYPTION_KEY
 from homeassistant.components.diagnostics import async_redact_data
-from homeassistant.const import CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntry
 
-from .const import DOMAIN
+from .const import DOMAIN, REDACT_KEYS
 from .coordinator import GreeConfigEntry, GreeCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,7 +32,7 @@ async def async_get_config_entry_diagnostics(
     #     diagnostics["entry_data"]["advanced"]["encryption_key"]
     # )
 
-    return async_redact_data(diagnostics, [CONF_ENCRYPTION_KEY, CONF_PASSWORD])
+    return async_redact_data(diagnostics, REDACT_KEYS)
 
 
 async def async_get_device_diagnostics(
@@ -56,7 +54,10 @@ async def async_get_device_diagnostics(
 
     coordinator: GreeCoordinator | None = entry.runtime_data.get(mac, None)
 
-    return {
-        "device": device.dict_repr,
-        "data": coordinator.get_coordinator_diagnostics() if coordinator else "",
-    }
+    return async_redact_data(
+        {
+            "device": device.dict_repr,
+            "data": coordinator.get_coordinator_diagnostics() if coordinator else "",
+        },
+        REDACT_KEYS,
+    )

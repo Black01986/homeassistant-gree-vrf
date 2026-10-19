@@ -21,6 +21,10 @@ class GreeProtocolError(GreeError):
     """Device returned invalid data."""
 
 
+class GreeMalformedResponseError(GreeProtocolError):
+    """Device response cannot be mapped unambiguously to the requested props."""
+
+
 class GreeBindingError(GreeError):
     """Failed to obtain encryption key."""
 
